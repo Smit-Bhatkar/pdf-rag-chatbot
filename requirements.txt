@@ -1,0 +1,11 @@
+streamlit
+langchain==0.3.0
+langchain-community==0.3.0
+langchain-core==0.3.0
+langchain-groq
+langchain-huggingface
+langchain-chroma
+chromadb
+pypdf
+sentence-transformers
+pydantic-settings
