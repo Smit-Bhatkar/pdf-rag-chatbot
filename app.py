@@ -1,6 +1,3 @@
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
 import os
 import tempfile
@@ -10,7 +7,6 @@ from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-
 
 # 1. Setup the Page
 st.set_page_config(page_title="RAG Chatbot", page_icon="📄")
@@ -46,6 +42,8 @@ if uploaded_file and api_key:
             chunks = text_splitter.split_documents(documents)
             
             # Create Embeddings & Vector Store
+            # Note: We are NOT using 'persist_directory', so this runs in RAM (Ephemeral)
+            # This avoids the SQLite errors on Streamlit Cloud.
             embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             vectorstore = Chroma.from_documents(chunks, embeddings)
             
@@ -91,6 +89,4 @@ if uploaded_file and api_key:
 elif not api_key:
     st.info("👈 Please enter your Groq API key in the sidebar to start.")
 elif not uploaded_file:
-
     st.info("👈 Please upload a PDF document to start chatting.")
-
