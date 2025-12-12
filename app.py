@@ -1,3 +1,6 @@
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
 import streamlit as st
 import os
 import tempfile
@@ -7,9 +10,7 @@ from langchain_chroma import Chroma
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
 
 # 1. Setup the Page
 st.set_page_config(page_title="RAG Chatbot", page_icon="📄")
@@ -92,3 +93,4 @@ elif not api_key:
 elif not uploaded_file:
 
     st.info("👈 Please upload a PDF document to start chatting.")
+
