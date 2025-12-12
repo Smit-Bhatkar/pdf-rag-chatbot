@@ -9,4 +9,3 @@ chromadb
 pypdf
 sentence-transformers
 pydantic-settings
-pysqlite3-binary
