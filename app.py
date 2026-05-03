@@ -78,7 +78,7 @@ _embeddings = HFInferenceEmbeddings()
 class AskRequest(BaseModel):
     session_id: str
     question: str
-    groq_api_key: str
+    groq_api_key: str | None = None  # Optional: falls back to GROQ_API_KEY env var
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +90,12 @@ async def serve_frontend():
     html_path = os.path.join(os.path.dirname(__file__), "static", "index.html")
     with open(html_path, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
+
+
+@app.get("/api-config")
+async def api_config():
+    """Tell the frontend whether GROQ_API_KEY is pre-configured server-side."""
+    return JSONResponse(content={"groq_key_configured": bool(os.environ.get("GROQ_API_KEY"))})
 
 
 @app.post("/upload")
@@ -146,8 +152,16 @@ async def ask_question(req: AskRequest):
     try:
         vectorstore = sessions[req.session_id]
 
+        # Resolve API key: prefer request body, fall back to environment variable
+        api_key = req.groq_api_key or os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="No Groq API key provided. Either pass groq_api_key in the request or set the GROQ_API_KEY environment variable.",
+            )
+
         llm = ChatGroq(
-            groq_api_key=req.groq_api_key,
+            groq_api_key=api_key,
             model_name="llama-3.3-70b-versatile",
             temperature=0.2,
         )

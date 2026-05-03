@@ -455,8 +455,24 @@
       <p class="sidebar-title">Setup</p>
 
       <!-- Groq API Key -->
-      <div style="margin-bottom: calc(var(--grid) * 2);">
-        <label for="apiKeyInput">Groq API Key</label>
+      <div id="apiKeySection" style="margin-bottom: calc(var(--grid) * 2);">
+        <label for="apiKeyInput">Groq API Key
+          <span
+            id="apiKeyBadge"
+            style="
+              display:none;
+              margin-left:6px;
+              font-size:0.72rem;
+              font-weight:600;
+              color:var(--color-success);
+              background:var(--color-success-bg);
+              padding:2px 8px;
+              border-radius:999px;
+              text-transform:uppercase;
+              letter-spacing:0.05em;
+            "
+          >✓ Pre-configured</span>
+        </label>
         <input
           type="password"
           id="apiKeyInput"
@@ -508,7 +524,7 @@
     <section class="chat-area" id="chatArea" aria-live="polite">
       <div class="empty-state" id="emptyState">
         <div class="empty-state-icon">💬</div>
-        <p>Upload a PDF and enter your Groq API key to start chatting with your document.</p>
+        <p id="emptyStateText">Upload a PDF and enter your Groq API key to start chatting with your document.</p>
       </div>
     </section>
 
@@ -548,6 +564,25 @@
       const askBtn        = document.getElementById('askBtn');
 
       let sessionId = null;
+      let serverKeyConfigured = false;  // true when GROQ_API_KEY is set server-side
+
+      /* ----- Detect server-side API key on load -------------------- */
+      (async () => {
+        try {
+          const res = await fetch('/api-config');
+          const cfg = await res.json();
+          serverKeyConfigured = cfg.groq_key_configured;
+          if (serverKeyConfigured) {
+            // Hide the input field, show badge, update hint
+            document.getElementById('apiKeyInput').style.display = 'none';
+            document.getElementById('apiKeyBadge').style.display = 'inline';
+            document.getElementById('emptyStateText').textContent =
+              'Upload a PDF to start chatting with your document.';
+          }
+        } catch (_) {
+          // Non-critical — fallback: keep input visible
+        }
+      })();
 
       /* ----- Helpers ----------------------------------------------- */
       function showBanner(type, msg) {
@@ -568,7 +603,8 @@
       }
 
       function setInputState() {
-        const ready = !!(sessionId && apiKeyInput.value.trim());
+        // Ready when: PDF uploaded AND (server has key OR user typed a key)
+        const ready = !!(sessionId && (serverKeyConfigured || apiKeyInput.value.trim()));
         questionInput.disabled = !ready;
         askBtn.disabled = !ready;
       }
@@ -668,7 +704,8 @@
             body: JSON.stringify({
               session_id: sessionId,
               question,
-              groq_api_key: apiKeyInput.value.trim()
+              // Only send the key if the user typed one (env var takes over otherwise)
+              groq_api_key: apiKeyInput.value.trim() || null
             })
           });
           const data = await res.json();
