@@ -9,6 +9,7 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.retrievers import BM25Retriever
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
+from langchain.retrievers.multi_query import MultiQueryRetriever
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 app = FastAPI(title="RAG Chatbot API")
@@ -16,7 +17,6 @@ app = FastAPI(title="RAG Chatbot API")
 # In-memory session store: { session_id: BM25Retriever }
 sessions: dict = {}
 
-# Paths relative to api/index.py → ../static
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _STATIC_DIR = os.path.join(_HERE, "..", "static")
 
@@ -24,7 +24,7 @@ _STATIC_DIR = os.path.join(_HERE, "..", "static")
 class AskRequest(BaseModel):
     session_id: str
     question: str
-    groq_api_key: str | None = None  # Falls back to GROQ_API_KEY env var
+    groq_api_key: str | None = None
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -51,12 +51,12 @@ async def upload_pdf(file: UploadFile = File(...)):
         os.remove(tmp_path)
 
         chunks = RecursiveCharacterTextSplitter(
-            chunk_size=1000, chunk_overlap=200
+            chunk_size=1200,   # larger chunks = more context per piece
+            chunk_overlap=250,
         ).split_documents(docs)
 
-        # BM25: pure Python, no API calls, no PyTorch, ~5 KB package
-        retriever = BM25Retriever.from_documents(chunks, k=3)
-
+        # k=6 gives BM25 more candidates to work with before deduplication
+        retriever = BM25Retriever.from_documents(chunks, k=6)
         session_id = str(uuid.uuid4())
         sessions[session_id] = retriever
 
@@ -77,15 +77,33 @@ async def ask_question(req: AskRequest):
         if not api_key:
             raise HTTPException(status_code=400, detail="No Groq API key provided.")
 
-        qa_chain = RetrievalQA.from_chain_type(
-            llm=ChatGroq(groq_api_key=api_key, model_name="llama-3.3-70b-versatile", temperature=0.2),
-            chain_type="stuff",
+        llm = ChatGroq(
+            groq_api_key=api_key,
+            model_name="llama-3.3-70b-versatile",
+            temperature=0.2,
+        )
+
+        # MultiQueryRetriever: rephrases the question in multiple ways using
+        # the LLM, then merges & deduplicates results — far better recall than
+        # plain BM25 keyword matching alone.
+        multi_retriever = MultiQueryRetriever.from_llm(
             retriever=sessions[req.session_id],
+            llm=llm,
+        )
+
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=multi_retriever,
             return_source_documents=True,
         )
         result = qa_chain.invoke({"query": req.question})
         sources = [
-            {"content": d.page_content, "page": d.metadata.get("page", "N/A"), "source": d.metadata.get("source", "N/A")}
+            {
+                "content": d.page_content,
+                "page": d.metadata.get("page", "N/A"),
+                "source": d.metadata.get("source", "N/A"),
+            }
             for d in result.get("source_documents", [])
         ]
         return JSONResponse(content={"answer": result["result"], "sources": sources})
