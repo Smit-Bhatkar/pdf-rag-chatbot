@@ -1,13 +1,15 @@
 import os
 import tempfile
 import uuid
+import requests as http_requests
+from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_chroma import Chroma
+from langchain_community.vectorstores import FAISS
+from langchain_core.embeddings import Embeddings
 from langchain_groq import ChatGroq
 from langchain.chains import RetrievalQA
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -17,21 +19,57 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ---------------------------------------------------------------------------
 app = FastAPI(title="RAG Chatbot API")
 
-# In-memory session store: { session_id: Chroma vectorstore }
+# In-memory session store: { session_id: FAISS vectorstore }
 sessions: dict = {}
 
-# Shared embedding model (loaded once)
-_embeddings = None
 
+# ---------------------------------------------------------------------------
+# Lightweight embeddings via HuggingFace Inference API (no PyTorch needed)
+# ---------------------------------------------------------------------------
+class HFInferenceEmbeddings(Embeddings):
+    """Call the free HuggingFace Inference API for embeddings.
 
-def get_embeddings():
-    """Lazy-load the embedding model so cold starts are faster."""
-    global _embeddings
-    if _embeddings is None:
-        _embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2"
+    Uses the same sentence-transformers/all-MiniLM-L6-v2 model but avoids
+    bundling PyTorch + transformers (~3 GB) locally.
+    """
+
+    def __init__(
+        self,
+        model_name: str = "sentence-transformers/all-MiniLM-L6-v2",
+        batch_size: int = 64,
+    ):
+        self.model_name = model_name
+        self.api_url = (
+            f"https://api-inference.huggingface.co/pipeline/"
+            f"feature-extraction/{model_name}"
         )
-    return _embeddings
+        self.batch_size = batch_size
+
+    def _call_api(self, texts: List[str]) -> List[List[float]]:
+        """Send a batch of texts to the HF Inference API."""
+        response = http_requests.post(
+            self.api_url,
+            json={"inputs": texts, "options": {"wait_for_model": True}},
+            timeout=120,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        """Embed a list of documents, batching if needed."""
+        all_embeddings: List[List[float]] = []
+        for i in range(0, len(texts), self.batch_size):
+            batch = texts[i : i + self.batch_size]
+            all_embeddings.extend(self._call_api(batch))
+        return all_embeddings
+
+    def embed_query(self, text: str) -> List[float]:
+        """Embed a single query string."""
+        return self._call_api([text])[0]
+
+
+# Shared embedding instance (stateless, no model to load)
+_embeddings = HFInferenceEmbeddings()
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +94,7 @@ async def serve_frontend():
 
 @app.post("/upload")
 async def upload_pdf(file: UploadFile = File(...)):
-    """Accept a PDF, build a Chroma vectorstore, return a session ID."""
+    """Accept a PDF, build a FAISS vectorstore, return a session ID."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
@@ -75,9 +113,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
         chunks = text_splitter.split_documents(documents)
 
-        # Embeddings & vector store
-        embeddings = get_embeddings()
-        vectorstore = Chroma.from_documents(chunks, embeddings)
+        # Embeddings & vector store (FAISS — lightweight, no onnxruntime)
+        vectorstore = FAISS.from_documents(chunks, _embeddings)
 
         # Clean up temp file
         os.remove(tmp_path)
