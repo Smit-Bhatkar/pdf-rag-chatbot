@@ -39,10 +39,8 @@ class HFInferenceEmbeddings(Embeddings):
         batch_size: int = 64,
     ):
         self.model_name = model_name
-        self.api_url = (
-            f"https://api-inference.huggingface.co/pipeline/"
-            f"feature-extraction/{model_name}"
-        )
+        # /models/ endpoint (the old /pipeline/feature-extraction/ is deprecated)
+        self.api_url = f"https://api-inference.huggingface.co/models/{model_name}"
         self.batch_size = batch_size
 
     def _call_api(self, texts: List[str]) -> List[List[float]]:
